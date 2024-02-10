@@ -1,7 +1,9 @@
-#include <cstdlib> 
-#include <cstdio> 
-#include <ctime> 
+#include <cstdlib>
+#include <cstdio>
+#include <ctime>
 #include <vector>
+#include <cmath>
+#include <cassert>
 
 using namespace std;
 
@@ -23,19 +25,21 @@ void feed_forward(NeuralNetwork* currentNeuralNetwork);
 void show_network_error(NeuralNetwork* currentNeuralNetwork);
 double sigmoid(double x);
 double sigmoid_derivative(double x);
-void calculate_mse(NeuralNetwork* currentNeuralNetwork);
-void outputlayer_backpropagation(NeuralNetwork* currentNeuralNetwork);
-void hiddenlayer_backpropagation(NeuralNetwork* currentNeuralNetwork);
 void backpropagation(NeuralNetwork* currentNeuralNetwork);
 void epoch(NeuralNetwork* currentNeuralNetwork);
+void print_derivatives_output_layer(NeuralNetwork* currentNeuralNetwork);
+void print_derivatives_hidden_layer(NeuralNetwork* currentNeuralNetwork);
+void print_nn_io(NeuralNetwork* currentNeuralNetwork);
+void print_nn_io(NeuralNetwork* currentNeuralNetwork);
 
 
-
-// I'm implement it considering that the connections will be placed on the afterward Neurons, check the image on assets
+// I'm implement it considering that the connections will be placed on the backward Neurons
 struct Connection {
     unsigned int id;
     Neuron* backwardNeuron;
     double weight;
+    double dWeight;
+    double dEtotal;
     Neuron* afterwardNeuron;
     Connection* next;
 
@@ -43,6 +47,8 @@ struct Connection {
         id = 0;
         backwardNeuron = nullptr;
         weight = 0.0;
+        dWeight = 0.0;
+        dEtotal = 0.0;
         afterwardNeuron = nullptr;
         next = nullptr;
     }
@@ -54,23 +60,29 @@ struct Connection {
 
 struct Neuron {
     unsigned int id;
-    double output; // neuron output represents the input dataset or the prediction (neuron value)
+    double activeOutput; // neuron output represents the input dataset or the prediction (neuron value - (a))
+    double output; // z
     double target; // target is the value that should be on output
+    double dError;
     double deltaLossFunction; // error gradient loss function
     double deltaActivationFunction; // error gradient activation function
+    double deltaZ;
     double deltaWeight; // error gradient respecting weight
-    double sumOfNextLayerGradients; 
+    double sumOfNextLayerGradients;
     double bias;
-    Connection* connections; // edges connecting two neurons using weights 
+    Connection* connections; // edges connecting two neurons using weights
     Neuron* next;
 
     Neuron() {
         id = 0;
+        activeOutput = 0;
         output = 0;
         bias = 0;
         target = 0;
+        dError = 0;
         deltaLossFunction = 0;
         deltaActivationFunction = 0;
+        deltaZ = 0;
         deltaWeight = 0;
         sumOfNextLayerGradients = 0;
         connections = nullptr;
@@ -87,7 +99,6 @@ struct Layer{
     unsigned int neuronsQuantity;
     bool inputLayer;
     bool outputLayer;
-    bool fed;
     Neuron* neurons;
     Layer* previous;
     Layer* next;
@@ -97,7 +108,6 @@ struct Layer{
         neuronsQuantity = 0;
         inputLayer = false;
         outputLayer = false;
-        fed = false;
         neurons = nullptr;
         previous = nullptr;
         next = nullptr;
@@ -106,14 +116,14 @@ struct Layer{
         if(previous != nullptr)
             delete previous;
     }
-    
+
 };
 
 struct NeuralNetwork{
     unsigned int id;
     unsigned int layersQuantity;
     double learningRate;
-    double mse;
+    double cost;
     double biggestError;
     Layer* layers;
     Layer* inputLayer;
@@ -122,7 +132,7 @@ struct NeuralNetwork{
         id = id;
         layersQuantity = layersQuantity;
         learningRate = learningRate;
-        mse = 0.0;
+        cost = 0.0;
         biggestError = 0.0;
         layers = nullptr;
         inputLayer = nullptr;
@@ -139,7 +149,7 @@ struct NeuralNetwork{
 
 void connect(unsigned int id, Neuron* backwardNeuron, double weight, Neuron* afterwardNeuron){
     Connection* newConnection = new Connection();     // Creating a new Connection
-    
+
     newConnection->id = id; // Setting the id
     newConnection->weight = weight; // Setting the weight
 
@@ -159,14 +169,14 @@ void connect(unsigned int id, Neuron* backwardNeuron, double weight, Neuron* aft
 
     newConnection->next = nullptr;
 
-    if(afterwardNeuron->connections == nullptr){
-        afterwardNeuron->connections = newConnection;
+    if(backwardNeuron->connections == nullptr){
+        backwardNeuron->connections = newConnection;
         return;
     }
 
-    // Taking the first connection pointer of afterward Neuron
-    Connection* currentConnection = afterwardNeuron->connections;
-    
+    // Taking the first connection pointer of backward Neuron
+    Connection* currentConnection = backwardNeuron->connections;
+
     // Passing through all connections from afterwards neuron to take last connection
     while(currentConnection->next != nullptr){
              currentConnection = currentConnection->next; // Changing the connection
@@ -176,9 +186,10 @@ void connect(unsigned int id, Neuron* backwardNeuron, double weight, Neuron* aft
 
 }
 
-void add_neuron(Layer* currentLayer, unsigned int id){
+void add_neuron(Layer* currentLayer, unsigned int id, double bias){
     Neuron* newNeuron = new Neuron();
     newNeuron->id = id; // Setting the id
+    newNeuron->bias = bias; // Bias
 
     if(!currentLayer) // Checking if the layer exists
         return;
@@ -191,7 +202,7 @@ void add_neuron(Layer* currentLayer, unsigned int id){
 
     // Taking the first neuron pointer of layer
     Neuron* currentNeuron = currentLayer->neurons;
-    
+
     // Passing through all neurons from layer to take last neuron
     while(currentNeuron->next != nullptr){
         currentNeuron = currentNeuron->next;
@@ -236,13 +247,6 @@ void add_layer(NeuralNetwork* currentNeuralNetwork, unsigned int id){
     if(currentLayer->previous->inputLayer){
         currentNeuralNetwork->inputLayer = currentLayer->previous;
     }
-    
-}
-
-void testing_next(NeuralNetwork* currentNeuralNetwork){
-    for(Layer* currentLayer = currentNeuralNetwork->inputLayer; currentLayer != nullptr; currentLayer = currentLayer->next){
-        cout << "Entrou aqui" << endl;
-    }
 }
                                                                                     /* LOAD CONFIGS */
 void load_layers(NeuralNetwork* currentNeuralNetwork, int num_layers){
@@ -253,10 +257,11 @@ void load_layers(NeuralNetwork* currentNeuralNetwork, int num_layers){
 
 void load_neurons(NeuralNetwork* currentNeuralNetwork, int num_neurons_per_layer[], int num_layers){
     Layer* currentLayer = currentNeuralNetwork->layers;
-    
+
     for(int i = num_layers - 1; i >= 0; i--){
         for(int j = 0; j < num_neurons_per_layer[i]; j++){
-            add_neuron(currentLayer, j);
+            double bias = static_cast<double>((rand() % 201) - 100) / 100;
+            add_neuron(currentLayer, j, bias);
             currentLayer->neuronsQuantity++;
         }
         currentLayer = currentLayer->previous;
@@ -264,12 +269,13 @@ void load_neurons(NeuralNetwork* currentNeuralNetwork, int num_neurons_per_layer
 }
 
 void load_connections(NeuralNetwork* currentNeuralNetwork){
-    for(Layer* currentLayer = currentNeuralNetwork->layers; !(currentLayer->inputLayer); currentLayer = currentLayer->previous){
+    for(Layer* currentLayer = currentNeuralNetwork->inputLayer; !(currentLayer->outputLayer); currentLayer = currentLayer->next){
         int i = 0;
+
         for(Neuron* currentNeuron = currentLayer->neurons; currentNeuron != nullptr; currentNeuron = currentNeuron->next){
-            for(Neuron* previousNeuron = currentLayer->previous->neurons; previousNeuron != nullptr; previousNeuron = previousNeuron->next){
+            for(Neuron* afterwardNeuron = currentLayer->next->neurons; afterwardNeuron != nullptr; afterwardNeuron = afterwardNeuron->next){
                 double weight = static_cast<double>((rand() % 201) - 100) / 100;
-                connect(i, previousNeuron, weight, currentNeuron);
+                connect(i, currentNeuron, weight, afterwardNeuron);
                 i++;
             }
         }
@@ -281,7 +287,7 @@ void update_input(Layer* inputLayer, unsigned int neuronID, double input){
     // For each neuron, search the one with the same id and set a new value to neuron
     for(Neuron* currentNeuron = inputLayer->neurons; currentNeuron != nullptr; currentNeuron = currentNeuron->next){
         if(currentNeuron->id == neuronID){
-            currentNeuron->output = input;
+            currentNeuron->activeOutput = input;
             return;
         }
     }
@@ -317,48 +323,118 @@ void feed_targets(NeuralNetwork* currentNeuralNetwork, double targets[], int num
 }
 
 void feed_forward(NeuralNetwork* currentNeuralNetwork){
-    for(Layer* currentLayer = currentNeuralNetwork->inputLayer->next; currentLayer != nullptr; currentLayer = currentLayer->next){
-        // For each neuron on layer, update its output considering the sum of weights multiplied by output neuron value from previous layer
+    for(Layer* currentLayer = currentNeuralNetwork->inputLayer; currentLayer != nullptr; currentLayer = currentLayer->next){
         for(Neuron* currentNeuron = currentLayer->neurons; currentNeuron != nullptr; currentNeuron = currentNeuron->next){
-            for(Connection* currentConnection = currentNeuron->connections; currentConnection != nullptr; currentConnection = currentConnection->next){
-                currentConnection->afterwardNeuron->output += currentConnection->weight * currentConnection->backwardNeuron->output;
+            if(!(currentLayer->inputLayer)){
+                currentNeuron->output += currentNeuron->bias;
+                currentNeuron->activeOutput = sigmoid(currentNeuron->output);
             }
-            currentNeuron->output += currentNeuron->bias;
-            currentNeuron->output = sigmoid(currentNeuron->output);
+
+            for(Connection* currentConnection = currentNeuron->connections; currentConnection != nullptr; currentConnection = currentConnection->next){
+                currentConnection->afterwardNeuron->output += currentConnection->weight * currentConnection->backwardNeuron->activeOutput;
+            }
         }
     }
 
 }
+
+void update_bias_manually(NeuralNetwork* currentNeuralNetwork){
+    for(Layer* currentLayer = currentNeuralNetwork->inputLayer; currentLayer != nullptr; currentLayer = currentLayer->next){
+        cout << "Atualizações na Layer " << currentLayer->id << ":" << endl;
+        for(Neuron* currentNeuron = currentLayer->neurons; currentNeuron != nullptr; currentNeuron = currentNeuron->next){
+            cout << "\tAtualizações do neurônio " << currentNeuron->id << ":" << endl;
+            double newBias = 0.0;
+            cin >> newBias;
+            currentNeuron->bias = newBias;
+        }
+    }
+}
+
+/* update connections manually*/
+void update_weights_manually(NeuralNetwork* currentNeuralNetwork){
+    for(Layer* currentLayer = currentNeuralNetwork->inputLayer; currentLayer != nullptr; currentLayer = currentLayer->next){
+        cout << "Atualizações na Layer " << currentLayer->id << ":" << endl;
+        for(Neuron* currentNeuron = currentLayer->neurons; currentNeuron != nullptr; currentNeuron = currentNeuron->next){
+            cout << "\tAtualizações do neurônio " << currentNeuron->id << ":" << endl;
+            for(Connection* currentConnection = currentNeuron->connections; currentConnection != nullptr; currentConnection = currentConnection->next){
+                cout << "\t\tAtualizando a conexão entre (" << currentConnection->backwardNeuron->id << ") e (" << currentConnection->afterwardNeuron->id << ")" << endl; 
+                double newWeight = 0.0;
+                cin >> newWeight;
+                currentConnection->weight = newWeight;
+            }
+        }
+    }
+}
+
+void update_weights_using_arrays(NeuralNetwork* currentNeuralNetwork){
+    double  weightsUpdates[] = {0.30, 0.13, 0.25, 0.42, 0.67, 0.84, 0.54, 0.52}; //These values are just for example purposes
+    int i = 0;
+    for(Layer* currentLayer = currentNeuralNetwork->inputLayer; currentLayer != nullptr; currentLayer = currentLayer->next){
+        //cout << "Atualizações na Layer " << currentLayer->id << ":" << endl;
+        for(Neuron* currentNeuron = currentLayer->neurons; currentNeuron != nullptr; currentNeuron = currentNeuron->next){
+            //cout << "\tAtualizações do neurônio " << currentNeuron->id << ":" << endl;
+            for(Connection* currentConnection = currentNeuron->connections; currentConnection != nullptr; currentConnection = currentConnection->next){
+                //cout << "\t\tAtualizando a conexão entre (" << currentConnection->backwardNeuron->id << ") e (" << currentConnection->afterwardNeuron->id << ")" << endl; 
+                double newWeight = weightsUpdates[i];
+                currentConnection->weight = newWeight;
+                i++;
+            }
+        }
+    }
+}
+
+void update_bias_using_arrays(NeuralNetwork* currentNeuralNetwork){
+    double  biasUpdates[] = {0.0, 0.42, 0.67}; //These values are just for example purposes
+    int i = 0;
+    for(Layer* currentLayer = currentNeuralNetwork->inputLayer; currentLayer != nullptr; currentLayer = currentLayer->next){
+        //cout << "Atualizações na Layer " << currentLayer->id << ":" << endl;
+        for(Neuron* currentNeuron = currentLayer->neurons; currentNeuron != nullptr; currentNeuron = currentNeuron->next){
+            //cout << "\tAtualizações do bias no neurônio " << currentNeuron->id << ":" << endl;
+            currentNeuron->bias = biasUpdates[i];
+        }
+        i++;
+    }
+}
+
                                                                                     /* PRINT FUNCTIONS */
 void show_network_error(NeuralNetwork* currentNeuralNetwork){
-    cout << "The network error is: "<< currentNeuralNetwork->mse << endl;
+    //cout << "The network error is: "<< currentNeuralNetwork->cost << endl;
+    cout << currentNeuralNetwork->cost << endl;
+
 }
 
 void show_network_biggest_error(NeuralNetwork* currentNeuralNetwork){
     cout << "The biggest error is: " << currentNeuralNetwork->biggestError << endl;
 }
 
-void print_layer(Layer* currentLayer) {
-    cout << "\033[38;2;255;255;255m";
-    cout << "Layer " << currentLayer->id << ":" << endl;
-    Neuron* currentNeuron = currentLayer->neurons;
-    while (currentNeuron != nullptr) {
-        cout << "\033[38;2;231;76;60m";
-        cout << "\tNeuron " << currentNeuron->id << ": " << currentNeuron->output << " - target: " << currentNeuron->target << endl;
-        Connection* currentConnection = currentNeuron->connections;
-        while(currentConnection != nullptr){
-            std::cout << "\033[38;2;41;128;185m";
-            cout << "\t\tConnection " << currentConnection->id << ": (" << currentConnection->backwardNeuron->id << ") _ " << 
-            currentConnection->weight << " _ (" << currentConnection->afterwardNeuron->id << ")" << endl;
-            currentConnection = currentConnection->next;
+void print_nn_io(NeuralNetwork* currentNeuralNetwork){
+    cout << "----------------------------------------------------------------------------------------------------------------" << endl;
+    for(Layer* currentLayer = currentNeuralNetwork->inputLayer; currentLayer != nullptr; currentLayer = currentLayer->next){
+        cout << "Layer " << currentLayer->id << ":" << endl;
+        for(Neuron* currentNeuron = currentLayer->neurons; currentNeuron != nullptr; currentNeuron = currentNeuron->next){
+            cout << "\tNeuron " << currentNeuron->id << ": " << currentNeuron->activeOutput << " - target: " << currentNeuron->target  << " - bias: " << currentNeuron->bias 
+            << " - Loss Function gradient: " << currentNeuron->deltaLossFunction << " - Activation Function gradient: " << currentNeuron->deltaActivationFunction
+            << " - Error Gradient: " << currentNeuron->dError << endl;
+            for(Connection* currentConnection = currentNeuron->connections; currentConnection != nullptr; currentConnection = currentConnection->next){
+                cout << "\t\tConnection " << currentConnection->id << ": ("
+                << currentConnection->backwardNeuron->id << ") _ " << currentConnection->weight << " _ (" << currentConnection->afterwardNeuron->id << ")" 
+                << " -> Weight gradient: " << currentConnection->dWeight << endl;
+            }
         }
-        currentNeuron = currentNeuron->next;
     }
 }
 
-void print_nn(NeuralNetwork* currentNeuralNetwork){
+void print_nn_oi(NeuralNetwork* currentNeuralNetwork){
+    cout << "----------------------------------------------------------------------------------------------------------------" << endl;
     for(Layer* currentLayer = currentNeuralNetwork->layers; currentLayer != nullptr; currentLayer = currentLayer->previous){
-        print_layer(currentLayer);
+        cout << "Layer " << currentLayer->id << ":" << endl;
+        for(Neuron* currentNeuron = currentLayer->neurons; currentNeuron != nullptr; currentNeuron = currentNeuron->next){
+            cout << "\tNeuron " << currentNeuron->id << ": " << currentNeuron->activeOutput << " - target: " << currentNeuron->target  << " - bias: " << currentNeuron->bias << endl;
+            for(Connection* currentConnection = currentNeuron->connections; currentConnection != nullptr; currentConnection = currentConnection->next){
+                cout << "\t\tConnection " << currentConnection->id << ": ("
+                << currentConnection->backwardNeuron->id << ") _ " << currentConnection->weight << " _ (" << currentConnection->afterwardNeuron->id << ")" << endl;
+            }
+        }
     }
 }
                                                                                     /* ACTIVATION FUNCTIONS */
@@ -369,69 +445,115 @@ double sigmoid(double x){
                                                                                    /* DERIVATIVE OF ACTIVATION FUNCTION */
 // remember to check if the derivative is correct
 double sigmoid_derivative(double x){
-    double output = sigmoid(x);
-    return output * (1 - output);
+    // x = sigmoid(z)
+    return x * (1 - x);
 }
 
-                                                                                    /* ERROR VERIFICATION WITH MSE */
-void calculate_mse(NeuralNetwork* currentNeuralNetwork){
-    Layer* outputLayer = currentNeuralNetwork->layers;
-
-    double totalError = 0.0;
-    for(Neuron* currentNeuron = outputLayer->neurons; currentNeuron != nullptr; currentNeuron = currentNeuron->next){
-        double error = (currentNeuron->output - currentNeuron->target);
-        totalError += error * error;
-    }
-
-    currentNeuralNetwork->mse = totalError/outputLayer->neuronsQuantity;
-
-    if(currentNeuralNetwork->mse > currentNeuralNetwork->biggestError){
-        currentNeuralNetwork->biggestError = currentNeuralNetwork->mse;
-    }
-
-}
-
-                                                                                    /* BACKPROGATION PROCCES */
-void calculate_gradient_outputlayer(NeuralNetwork* currentNeuralNetwork){
+void print_derivatives_output_layer(NeuralNetwork* currentNeuralNetwork){
     Layer* outputLayer = currentNeuralNetwork->layers;
 
     for(Neuron* currentNeuron = outputLayer->neurons; currentNeuron != nullptr; currentNeuron = currentNeuron->next){
-        currentNeuron->deltaLossFunction = (currentNeuron->output - currentNeuron->target);
-        currentNeuron->deltaActivationFunction = sigmoid_derivative(currentNeuron->output);
-        currentNeuron->deltaWeight = currentNeuron->deltaLossFunction * currentNeuron->deltaActivationFunction;
-    }
-
-}
-
-void calculate_gradient_hiddenlayers_and_update_weights(NeuralNetwork* currentNeuralNetwork){
-    
-    for(Layer* currentLayer = currentNeuralNetwork->layers; currentLayer != nullptr;  currentLayer = currentLayer->next) {
-       
-        for(Neuron* currentNeuron = currentLayer->neurons; currentNeuron != nullptr; currentNeuron = currentNeuron->next){
-            for(Connection* currentConnection = currentNeuron->connections; currentConnection != nullptr; currentConnection = currentConnection->next){
-                currentConnection->weight +=  ((-currentNeuralNetwork->learningRate) * currentConnection->afterwardNeuron->deltaWeight);
-            }
-            currentNeuron->bias += (-currentNeuralNetwork->learningRate) * currentNeuron->deltaLossFunction;
-
+        cout << "Gradiente da função de custo: " << currentNeuron->deltaLossFunction << endl;
+        cout << "Gradiente da função de ativação: " << currentNeuron->deltaActivationFunction << endl;
+        cout << "Gradiente do erro: " << currentNeuron->dError << endl;
+        for(Connection* currentConnection = currentNeuron->connections; currentConnection != nullptr; currentConnection = currentConnection->next){
+            cout << "Atualizou o gradiente do erro para o neurônio "<< currentConnection->backwardNeuron->id << " para: " << currentConnection->backwardNeuron->dError << endl;
         }
-        
+    }
+}
+
+void print_derivatives_hidden_layer(NeuralNetwork* currentNeuralNetwork){
+    Layer* outputLayer = currentNeuralNetwork->layers;
+
+    for(Neuron* currentNeuron = outputLayer->neurons; currentNeuron = nullptr; currentNeuron = currentNeuron->next){
+        for(Connection* currentConnection = currentNeuron->connections; currentConnection != nullptr; currentConnection = currentConnection->next){
+            cout << "Atualizou o gradiente do erro para o neurônio "<< currentConnection->backwardNeuron->id << " para: " << currentConnection->backwardNeuron->dError << endl;
+        }
+    }
+}
+
+                                                                                    /* ERROR VERIFICATION WITH cost */
+void calculate_error_cost(NeuralNetwork* currentNeuralNetwork){
+    Layer* outputLayer = currentNeuralNetwork->layers;
+    double totalCost = 0.0;
+
+    for(Neuron* currentNeuron = outputLayer->neurons; currentNeuron != nullptr; currentNeuron = currentNeuron->next){
+        double error = currentNeuron->target - currentNeuron->activeOutput;
+        error = (error * error)/ outputLayer->neuronsQuantity;
+        //cout << "Error : " << error << endl;
+        totalCost +=  error;
+    }
+
+    currentNeuralNetwork->cost = totalCost;
+    //cout << "Total Error: " <<  totalCost << endl;
+    if(currentNeuralNetwork->cost > currentNeuralNetwork->biggestError){
+        currentNeuralNetwork->biggestError = currentNeuralNetwork->cost;
+    }
+}
+
+                                                                                    /* BACKPROGATION PROCESS */
+void calculate_output_derivatives(NeuralNetwork* currentNeuralNetwork){
+    Layer* outputLayer = currentNeuralNetwork->layers;
+
+    for(Neuron* currentNeuron = outputLayer->neurons; currentNeuron != nullptr; currentNeuron = currentNeuron->next){
+        // Loss Function, Activation Function and Error Gradients
+        currentNeuron->deltaLossFunction        = -2*(currentNeuron->target - currentNeuron->activeOutput)/outputLayer->neuronsQuantity;
+        currentNeuron->deltaActivationFunction  = sigmoid_derivative(currentNeuron->activeOutput);
+        currentNeuron->dError                   = currentNeuron->deltaActivationFunction * currentNeuron->deltaLossFunction;
+
+    }
+
+}
+
+void calculate_hidden_derivatives(NeuralNetwork* currentNeuralNetwork){
+    for(Layer* currentLayer = currentNeuralNetwork->layers->previous; currentLayer != nullptr; currentLayer = currentLayer->previous){
         for(Neuron* currentNeuron = currentLayer->neurons; currentNeuron != nullptr; currentNeuron = currentNeuron->next){
             for(Connection* currentConnection = currentNeuron->connections; currentConnection != nullptr; currentConnection = currentConnection->next){
-                currentConnection->backwardNeuron->deltaWeight += currentConnection->afterwardNeuron->deltaWeight * currentConnection->weight;
+                currentConnection->dWeight = currentConnection->afterwardNeuron->dError * currentConnection->afterwardNeuron->activeOutput;
+                currentNeuron->dError += (currentConnection->afterwardNeuron->dError * currentConnection->weight); //currentConnection->backwardNeuron->dError +=
 
+            }
+            currentNeuron->deltaActivationFunction = sigmoid_derivative(currentNeuron->activeOutput);
+            currentNeuron->dError *=  currentNeuron->deltaActivationFunction;
+        }
+    }
+}
+
+
+void update_backprogated_gradients_to_weights(NeuralNetwork* currentNeuralNetwork){
+     for(Layer* currentLayer = currentNeuralNetwork->layers->previous; currentLayer != nullptr; currentLayer = currentLayer->previous){
+        for(Neuron* currentNeuron = currentLayer->neurons; currentNeuron != nullptr; currentNeuron = currentNeuron->next){
+            for(Connection* currentConnection = currentNeuron->connections; currentConnection != nullptr; currentConnection = currentConnection->next){
+                currentConnection->weight += ((-currentNeuralNetwork->learningRate) * currentConnection->dWeight);
+            }
+        }
+    }
+}
+
+void update_backprogated_gradients_to_biases(NeuralNetwork* currentNeuralNetwork){
+     for(Layer* currentLayer = currentNeuralNetwork->layers->previous; currentLayer != nullptr; currentLayer = currentLayer->previous){
+        for(Neuron* currentNeuron = currentLayer->neurons; currentNeuron != nullptr; currentNeuron = currentNeuron->next){
+            for(Connection* currentConnection = currentNeuron->connections; currentConnection != nullptr; currentConnection = currentConnection->next){
+                currentConnection->backwardNeuron->bias += ((-currentNeuralNetwork->learningRate) * currentConnection->afterwardNeuron->dError);
             }
         }
     }
 }
 
 void backpropagation(NeuralNetwork* currentNeuralNetwork){
-    calculate_gradient_outputlayer(currentNeuralNetwork);
-    calculate_gradient_hiddenlayers_and_update_weights(currentNeuralNetwork);
+    calculate_output_derivatives(currentNeuralNetwork);
+    calculate_hidden_derivatives(currentNeuralNetwork);
+    update_backprogated_gradients_to_weights(currentNeuralNetwork);
+    update_backprogated_gradients_to_biases(currentNeuralNetwork);
 }
 
 void epoch(NeuralNetwork* currentNeuralNetwork){
     feed_forward(currentNeuralNetwork);
-    calculate_mse(currentNeuralNetwork);
+    //print_nn_io(currentNeuralNetwork);
+    calculate_error_cost(currentNeuralNetwork);
+    //print_nn_oi(currentNeuralNetwork);
     show_network_error(currentNeuralNetwork);
     backpropagation(currentNeuralNetwork);
+
+
 }

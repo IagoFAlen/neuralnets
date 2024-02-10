@@ -9,12 +9,14 @@
 #include <vector>
 using namespace std;
 
+#define TRAIN_FILE "../training/nn-trainingtest.csv";
+
 #include "./neuralnetwork.hpp"
 
 int main(int argc, char* argv[]){
     srand(time(NULL));
 
-    int id = 0, learningRate = 0.01;
+    int id = 0, learningRate = 1e-3;
     // Check if there are enough command line arguments
     int num_layers = 0;
     int num_neurons_per_layer[argc-5];
@@ -42,14 +44,16 @@ int main(int argc, char* argv[]){
     load_layers(neuralnetwork, num_layers);
     load_neurons(neuralnetwork, num_neurons_per_layer, num_layers);
     load_connections(neuralnetwork);
-    //print_nn(neuralnetwork);
+    update_weights_using_arrays(neuralnetwork);
+    update_bias_using_arrays(neuralnetwork);
+    //print_nn_io(neuralnetwork);
 
     string line = "";
     double input_neurons[num_neurons_per_layer[0]];
     double output_layer_targets[num_neurons_per_layer[num_layers -1]];
     /// TREINAMENTO DAS ENTRADAS
     ifstream trainFile;
-    string trainFilePath = "../training/nn-training.csv";
+    string trainFilePath = TRAIN_FILE;
     trainFile.open(trainFilePath);
 
     while(getline(trainFile, line)){
@@ -68,10 +72,9 @@ int main(int argc, char* argv[]){
 
             string tempStringTrain = "";
         }
-            
-        feed_inputs(neuralnetwork, input_neurons, num_neurons_per_layer);
         
 
+        feed_inputs(neuralnetwork, input_neurons, num_neurons_per_layer);
         feed_targets(neuralnetwork, output_layer_targets, num_layers, num_neurons_per_layer);
         
 
@@ -80,8 +83,9 @@ int main(int argc, char* argv[]){
         epoch(neuralnetwork);
         line = "";
     }
-    print_nn(neuralnetwork);
-    show_network_biggest_error(neuralnetwork);
+
+    //print_nn(neuralnetwork);
+    //show_network_biggest_error(neuralnetwork);
         
     return 0;
 }
