@@ -1,6 +1,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <ctime>
+#include <iostream>
 #include <vector>
 #include <cmath>
 #include <cassert>
@@ -15,21 +16,20 @@ struct NeuralNetwork;
 
 // FUNCTIONS DECLARATIONS
 void connect(unsigned int id, Neuron* backwardNeuron, double weight, Neuron* afterwardNeuron);
-void add_neuron(Layer* currentLayer, unsigned int id);
+void add_neuron(Layer* currentLayer, unsigned int id, double bias);
 void add_layer(NeuralNetwork* currentNeuralNetwork, unsigned int id);
 void update_input(Layer* inputLayer, unsigned int neuronID, double input);
 void update_target(Layer* outputLayer, unsigned int neuronID, double target);
-void feed_inputs(NeuralNetwork* currentNeuralNetwork, vector<double> inputs);
-void feed_targets(NeuralNetwork* currentNeuralNetwork, vector<double> targets);
+void feed_inputs(NeuralNetwork* currentNeuralNetwork, double inputs[], int num_neurons_per_layer[]);
+void feed_targets(NeuralNetwork* currentNeuralNetwork, double targets[], int num_layers, int num_neurons_per_layer[]);
 void feed_forward(NeuralNetwork* currentNeuralNetwork);
 void show_network_error(NeuralNetwork* currentNeuralNetwork);
 double sigmoid(double x);
 double sigmoid_derivative(double x);
 void backpropagation(NeuralNetwork* currentNeuralNetwork);
-void epoch(NeuralNetwork* currentNeuralNetwork);
+void train_step(NeuralNetwork* currentNeuralNetwork);
 void print_derivatives_output_layer(NeuralNetwork* currentNeuralNetwork);
 void print_derivatives_hidden_layer(NeuralNetwork* currentNeuralNetwork);
-void print_nn_io(NeuralNetwork* currentNeuralNetwork);
 void print_nn_io(NeuralNetwork* currentNeuralNetwork);
 
 
@@ -89,6 +89,8 @@ struct Neuron {
         next = nullptr;
     }
     ~Neuron() {
+        if(connections != nullptr)
+            delete connections;
         if(next != nullptr)
             delete next;
     }
@@ -113,6 +115,8 @@ struct Layer{
         next = nullptr;
     }
     ~Layer(){
+        if(neurons != nullptr)
+            delete neurons;
         if(previous != nullptr)
             delete previous;
     }
@@ -128,10 +132,9 @@ struct NeuralNetwork{
     Layer* layers;
     Layer* inputLayer;
 
-    NeuralNetwork(unsigned int id, unsigned int layersQuantity, double learningRate){
-        id = id;
-        layersQuantity = layersQuantity;
-        learningRate = learningRate;
+    // Parameters named like the members would shadow them ("id = id" assigns the parameter to itself)
+    NeuralNetwork(unsigned int networkId, unsigned int networkLayersQuantity, double networkLearningRate)
+        : id(networkId), layersQuantity(networkLayersQuantity), learningRate(networkLearningRate) {
         cost = 0.0;
         biggestError = 0.0;
         layers = nullptr;
@@ -323,6 +326,13 @@ void feed_targets(NeuralNetwork* currentNeuralNetwork, double targets[], int num
 }
 
 void feed_forward(NeuralNetwork* currentNeuralNetwork){
+    // output (z) is accumulated with += below, so it must start at zero for every sample
+    for(Layer* currentLayer = currentNeuralNetwork->inputLayer->next; currentLayer != nullptr; currentLayer = currentLayer->next){
+        for(Neuron* currentNeuron = currentLayer->neurons; currentNeuron != nullptr; currentNeuron = currentNeuron->next){
+            currentNeuron->output = 0.0;
+        }
+    }
+
     for(Layer* currentLayer = currentNeuralNetwork->inputLayer; currentLayer != nullptr; currentLayer = currentLayer->next){
         for(Neuron* currentNeuron = currentLayer->neurons; currentNeuron != nullptr; currentNeuron = currentNeuron->next){
             if(!(currentLayer->inputLayer)){
@@ -375,6 +385,9 @@ void update_weights_using_arrays(NeuralNetwork* currentNeuralNetwork){
             //cout << "\tAtualizações do neurônio " << currentNeuron->id << ":" << endl;
             for(Connection* currentConnection = currentNeuron->connections; currentConnection != nullptr; currentConnection = currentConnection->next){
                 //cout << "\t\tAtualizando a conexão entre (" << currentConnection->backwardNeuron->id << ") e (" << currentConnection->afterwardNeuron->id << ")" << endl; 
+                // Only 8 values exist: a bigger network would read past the end of the array
+                if(i >= (int)(sizeof(weightsUpdates) / sizeof(weightsUpdates[0])))
+                    return;
                 double newWeight = weightsUpdates[i];
                 currentConnection->weight = newWeight;
                 i++;
@@ -387,6 +400,9 @@ void update_bias_using_arrays(NeuralNetwork* currentNeuralNetwork){
     double  biasUpdates[] = {0.0, 0.42, 0.67}; //These values are just for example purposes
     int i = 0;
     for(Layer* currentLayer = currentNeuralNetwork->inputLayer; currentLayer != nullptr; currentLayer = currentLayer->next){
+        // Only 3 values exist (one per layer): a deeper network would read past the end of the array
+        if(i >= (int)(sizeof(biasUpdates) / sizeof(biasUpdates[0])))
+            return;
         //cout << "Atualizações na Layer " << currentLayer->id << ":" << endl;
         for(Neuron* currentNeuron = currentLayer->neurons; currentNeuron != nullptr; currentNeuron = currentNeuron->next){
             //cout << "\tAtualizações do bias no neurônio " << currentNeuron->id << ":" << endl;
@@ -465,7 +481,7 @@ void print_derivatives_output_layer(NeuralNetwork* currentNeuralNetwork){
 void print_derivatives_hidden_layer(NeuralNetwork* currentNeuralNetwork){
     Layer* outputLayer = currentNeuralNetwork->layers;
 
-    for(Neuron* currentNeuron = outputLayer->neurons; currentNeuron = nullptr; currentNeuron = currentNeuron->next){
+    for(Neuron* currentNeuron = outputLayer->neurons; currentNeuron != nullptr; currentNeuron = currentNeuron->next){
         for(Connection* currentConnection = currentNeuron->connections; currentConnection != nullptr; currentConnection = currentConnection->next){
             cout << "Atualizou o gradiente do erro para o neurônio "<< currentConnection->backwardNeuron->id << " para: " << currentConnection->backwardNeuron->dError << endl;
         }
@@ -508,11 +524,19 @@ void calculate_output_derivatives(NeuralNetwork* currentNeuralNetwork){
 void calculate_hidden_derivatives(NeuralNetwork* currentNeuralNetwork){
     for(Layer* currentLayer = currentNeuralNetwork->layers->previous; currentLayer != nullptr; currentLayer = currentLayer->previous){
         for(Neuron* currentNeuron = currentLayer->neurons; currentNeuron != nullptr; currentNeuron = currentNeuron->next){
-            for(Connection* currentConnection = currentNeuron->connections; currentConnection != nullptr; currentConnection = currentConnection->next){
-                currentConnection->dWeight = currentConnection->afterwardNeuron->dError * currentConnection->afterwardNeuron->activeOutput;
-                currentNeuron->dError += (currentConnection->afterwardNeuron->dError * currentConnection->weight); //currentConnection->backwardNeuron->dError +=
+            // dError is accumulated with += below, so it must start at zero for every sample
+            currentNeuron->dError = 0.0;
 
+            for(Connection* currentConnection = currentNeuron->connections; currentConnection != nullptr; currentConnection = currentConnection->next){
+                // dE/dw = (error of the neuron that receives) * (activation that goes through the connection)
+                currentConnection->dWeight = currentConnection->afterwardNeuron->dError * currentConnection->backwardNeuron->activeOutput;
+                currentNeuron->dError += (currentConnection->afterwardNeuron->dError * currentConnection->weight);
             }
+
+            // Input neurons have no activation function, bias or previous layer, so the error stops here
+            if(currentLayer->inputLayer)
+                continue;
+
             currentNeuron->deltaActivationFunction = sigmoid_derivative(currentNeuron->activeOutput);
             currentNeuron->dError *=  currentNeuron->deltaActivationFunction;
         }
@@ -530,12 +554,12 @@ void update_backprogated_gradients_to_weights(NeuralNetwork* currentNeuralNetwor
     }
 }
 
+// dE/db = dError of the neuron itself (z = sum(w * a) + b, so dz/db = 1).
+// Starts at the output layer and stops before the input layer, which has no bias.
 void update_backprogated_gradients_to_biases(NeuralNetwork* currentNeuralNetwork){
-     for(Layer* currentLayer = currentNeuralNetwork->layers->previous; currentLayer != nullptr; currentLayer = currentLayer->previous){
+     for(Layer* currentLayer = currentNeuralNetwork->layers; !(currentLayer->inputLayer); currentLayer = currentLayer->previous){
         for(Neuron* currentNeuron = currentLayer->neurons; currentNeuron != nullptr; currentNeuron = currentNeuron->next){
-            for(Connection* currentConnection = currentNeuron->connections; currentConnection != nullptr; currentConnection = currentConnection->next){
-                currentConnection->backwardNeuron->bias += ((-currentNeuralNetwork->learningRate) * currentConnection->afterwardNeuron->dError);
-            }
+            currentNeuron->bias += ((-currentNeuralNetwork->learningRate) * currentNeuron->dError);
         }
     }
 }
@@ -547,7 +571,9 @@ void backpropagation(NeuralNetwork* currentNeuralNetwork){
     update_backprogated_gradients_to_biases(currentNeuralNetwork);
 }
 
-void epoch(NeuralNetwork* currentNeuralNetwork){
+// One training step = one sample (stochastic gradient descent with batch size 1).
+// An epoch is a full pass over the dataset, which is the loop in main.
+void train_step(NeuralNetwork* currentNeuralNetwork){
     feed_forward(currentNeuralNetwork);
     //print_nn_io(currentNeuralNetwork);
     calculate_error_cost(currentNeuralNetwork);
